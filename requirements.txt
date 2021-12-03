@@ -1,0 +1,4 @@
+sounddevice==0.4.3
+vosk==0.3.32
+etherpad-lite==0.5
+requests>=2.25.1
