@@ -6,6 +6,8 @@ import queue
 import sounddevice as sd
 import vosk
 import sys
+import httpx
+import requests
 import json
 from etherpad_lite import EtherpadLiteClient
 
@@ -24,6 +26,7 @@ DEFAULT_ETHERPAD_API_KEY = 'myapikey'
 DEFAULT_ETHERPAD_URL = 'http://localhost:9001'
 ETHERPAD_API_VERSION = '1.2.13'
 DEFAULT_PAD_ID = 'MIC2ETHER'
+API_PUNKPROSE_URL = "http://api.collectivat.cat/punkProse"
 
 q = queue.Queue()
 
@@ -40,6 +43,39 @@ def callback(indata, frames, time, status):
         print(status, file=sys.stderr)
     q.put(bytes(indata))
 
+def punctuate(text, lang, token):
+    json_data = {'source':text, 
+                 'type':'text',  
+                 'lang':lang,
+                 'recase':True,
+                 'token':token}
+
+    service_url = API_PUNKPROSE_URL
+    result = text
+    punctuation_successful = False
+
+    try:
+        r = httpx.post(service_url, json=json_data, timeout=None)
+        if r.status_code == 200:
+            punkProseResponse = r.json()
+            result = punkProseResponse['result']
+            punctuation_successful = True
+        else:
+            error = r
+
+            print("Error while processing punctuation request.")
+            print(error)
+            try:
+                print(r.json()['detail'])
+            except:
+                pass
+
+    except httpx.HTTPError as exc:
+        print(f"Error while requesting {exc.request.url!r}.")
+        print(exc)
+
+    return result, punctuation_successful
+
 
 parser = argparse.ArgumentParser(description="Dictation with Etherpad", add_help=False)
 parser.add_argument('-a', '--list-audio-devices', action='store_true', help='show list of audio devices and exit')
@@ -48,7 +84,6 @@ if args.list_audio_devices:
     print(sd.query_devices())
     parser.exit(0)
 parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter, parents=[parser])
-parser.add_argument('-w', '--outwav', type=str, help='audio file to store recording to')
 parser.add_argument('-x', '--outtxt', type=str, help='text file to store transcription to')
 parser.add_argument('-m', '--model', type=str, metavar='MODEL_PATH', help='Path to the model')
 parser.add_argument('-d', '--device', type=int_or_str, help='input device (numeric ID or substring)')
@@ -58,6 +93,7 @@ parser.add_argument('-t', '--token', type=str, help='PunkProse token if sending 
 parser.add_argument('-u', '--url', type=str, help='Etherpad base URL (default: %s)'%DEFAULT_ETHERPAD_URL, default=DEFAULT_ETHERPAD_URL)
 parser.add_argument('-k', '--apikey', type=str, help='Etherpad API key (default: %s)'%DEFAULT_ETHERPAD_API_KEY, default=DEFAULT_ETHERPAD_API_KEY)
 parser.add_argument('-p', '--padid', type=str, help='Etherpad pad ID to write to (default: %s)'%DEFAULT_PAD_ID, default=DEFAULT_PAD_ID)
+parser.add_argument('-s', '--shortcuts', type=str, help='Path to shortcuts JSON file')
 
 if __name__ == "__main__":    
     args = parser.parse_args(remaining)
@@ -65,11 +101,11 @@ if __name__ == "__main__":
     model_path = args.model
     token = args.token
     lang = args.language
-    out_wav = args.outwav
     out_txt = args.outtxt
     etherpad_api_key = args.apikey
     etherpad_api_url = args.url + '/api'
     pad_id = args.padid
+    shortcuts_json_path = args.shortcuts
 
     if not model_path:
         if not lang:
@@ -110,6 +146,16 @@ if __name__ == "__main__":
         # soundfile expects an int, sounddevice provides a float:
         args.samplerate = int(device_info['default_samplerate'])
 
+    if args.shortcuts:
+        try:
+            with open(args.shortcuts, "r") as jsonfile: 
+                shortcuts_data = json.load(jsonfile)
+            inverted_shortcuts = {v: k for k, v in shortcuts_data.items()}
+            print(inverted_shortcuts)
+        except Exception as e:
+            print("ERROR: Couldn't read shortcuts file", args.shortcuts)
+            print(e)
+
 
     try:
         c = EtherpadLiteClient(base_params={'apikey':etherpad_api_key}, api_version=ETHERPAD_API_VERSION, base_url=etherpad_api_url)
@@ -119,7 +165,7 @@ if __name__ == "__main__":
         else:
             print("Creating Pad with PadID %s"%pad_id)
             c.createPad(padID=pad_id, text='')
-
+        print("PAD URL:", args.url + "/p/" + pad_id)
     except Exception as e:
         print("Error connecting to Etherpad")
         parser.exit(type(e).__name__ + ': ' + str(e))
@@ -128,8 +174,8 @@ if __name__ == "__main__":
     try:
         model = vosk.Model(model_path)
 
-        if out_wav:
-            dump_fn = open(out_wav, "wb")
+        if out_txt:
+            dump_fn = open(out_txt, "wb")
         else:
             dump_fn = None
 
@@ -141,25 +187,73 @@ if __name__ == "__main__":
 
             rec = vosk.KaldiRecognizer(model, args.samplerate)
 
-            in_paragraph = False
+            go_to_punctuate = False
+            end=False
+            curr_paragraph = []
+            all_paragraphs = []
             while True:
                 data = q.get()
                 if rec.AcceptWaveform(data):
                     # print(rec.Result())
                     segment_result = json.loads(rec.Result())
                     if segment_result['text']:
-                        print(segment_result['text'])
-                        c.appendText(padID=pad_id, text=segment_result['text'] + " ")
-                        in_paragraph=True
-                    elif in_paragraph:
-                        print("")
-                        c.appendText(padID=pad_id, text="\n")
-                        in_paragraph=False
+                        #Check if it's a shortcut
+                        if segment_result['text'] in inverted_shortcuts:
+                            print('<' + inverted_shortcuts[segment_result['text']] + '>')
 
-                # else:
-                #     print(rec.PartialResult())
-                if dump_fn is not None:
-                    dump_fn.write(data)
+                            #Process command
+                            if inverted_shortcuts[segment_result['text']] == 'NEWLINE':
+                                c.appendText(padID=pad_id, text="\n")
+                                go_to_punctuate=True
+                            elif inverted_shortcuts[segment_result['text']] == 'END':
+                                go_to_punctuate=True
+                                end=True
+                        else:
+                            print(segment_result['text'])
+                            c.appendText(padID=pad_id, text=segment_result['text'] + "\n")
+                            curr_paragraph.append(segment_result['text'])
+                    elif curr_paragraph:
+                        print("")
+                        go_to_punctuate=True
+
+                    if token and go_to_punctuate and curr_paragraph:
+                        #punctuate current paragraph
+                        to_punc = ' '.join(curr_paragraph)
+                        punctuated_paragraph_plain, status = punctuate(to_punc, lang, token)
+                        punctuated_paragraph_plain_tokens = punctuated_paragraph_plain.split()
+                        punctuated_segmented_paragraph = ""
+                        plain_token_index = 0
+
+                        #transfer new lines to punctutated paragraph
+                        line_token_counts = [len(l.split()) for l in curr_paragraph]
+                        newline_indices = [sum(line_token_counts[0:i])+c-1 for i,c in enumerate(line_token_counts)]
+
+                        for i, t in enumerate(punctuated_paragraph_plain_tokens):
+                            punctuated_segmented_paragraph += t 
+                            print(t, end='')
+                            if i in newline_indices:
+                                punctuated_segmented_paragraph += '\n'
+                                print('')
+                            else:
+                                punctuated_segmented_paragraph += ' '
+                                print(' ', end='')
+
+                        #clean current paragraph
+                        curr_paragraph = []
+
+                        #add it to all paragraphs
+                        all_paragraphs.append(punctuated_segmented_paragraph)
+
+                        #set the whole pad to all_paragraphs
+                        c.setText(padID=pad_id, text='\n'.join(all_paragraphs)+'\n\n')
+
+                        go_to_punctuate = False
+                        if end:
+                            break                        
+
+            if dump_fn is not None:
+                dump_fn.write("test")
+                dump_fn.close()
 
     except KeyboardInterrupt:
         print('\nDone')
