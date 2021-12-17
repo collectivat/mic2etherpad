@@ -34,12 +34,12 @@ optional arguments:
 
 ## Setup
 
-1- Install and run [Etherpad](https://github.com/ether/etherpad-lite)
-2- Note down the URL it's running
-3- Note down the API key stored inside `APIKEY.txt` (or change it if you like)
-4- Clone this repository: `git clone https://github.com/collectivat/mic2etherpad.git`
-5- Enter in the directory: `cd mic2etherpad`
-6- Install required python modules: `pip install -r requirements.txt`
+1. Install and run [Etherpad](https://github.com/ether/etherpad-lite)
+2. Note down the URL it's running (e.g. http://localhost:9001)
+3. Note down the API key stored inside `APIKEY.txt` (or change it if you like)
+4. Clone this repository: `git clone https://github.com/collectivat/mic2etherpad.git`
+5. Enter in the directory: `cd mic2etherpad`
+6. Install required python modules: `pip install -r requirements.txt`
 
 ## Run
 
