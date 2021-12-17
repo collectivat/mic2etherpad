@@ -146,6 +146,7 @@ if __name__ == "__main__":
         # soundfile expects an int, sounddevice provides a float:
         args.samplerate = int(device_info['default_samplerate'])
 
+    inverted_shortcuts = {}
     if args.shortcuts:
         try:
             with open(args.shortcuts, "r") as jsonfile: 
@@ -175,7 +176,7 @@ if __name__ == "__main__":
         model = vosk.Model(model_path)
 
         if out_txt:
-            dump_fn = open(out_txt, "wb")
+            dump_fn = open(out_txt, "w")
         else:
             dump_fn = None
 
@@ -214,6 +215,8 @@ if __name__ == "__main__":
                             curr_paragraph.append(segment_result['text'])
                     elif curr_paragraph:
                         print("")
+                        if curr_paragraph:
+                            c.appendText(padID=pad_id, text="\n")
                         go_to_punctuate=True
 
                     if token and go_to_punctuate and curr_paragraph:
@@ -230,13 +233,10 @@ if __name__ == "__main__":
 
                         for i, t in enumerate(punctuated_paragraph_plain_tokens):
                             punctuated_segmented_paragraph += t 
-                            print(t, end='')
                             if i in newline_indices:
                                 punctuated_segmented_paragraph += '\n'
-                                print('')
                             else:
                                 punctuated_segmented_paragraph += ' '
-                                print(' ', end='')
 
                         #clean current paragraph
                         curr_paragraph = []
@@ -248,11 +248,11 @@ if __name__ == "__main__":
                         c.setText(padID=pad_id, text='\n'.join(all_paragraphs)+'\n\n')
 
                         go_to_punctuate = False
-                        if end:
-                            break                        
+                    if end:
+                        break                        
 
             if dump_fn is not None:
-                dump_fn.write("test")
+                dump_fn.write('\n'.join(all_paragraphs))
                 dump_fn.close()
 
     except KeyboardInterrupt:
