@@ -12,16 +12,7 @@ import json
 from etherpad_lite import EtherpadLiteClient
 
 MODEL_DIR = 'models'
-MODEL_PATH_DICT = { 'en':'models/vosk-model-small-en-us-0.15', 
-                    'tr':'models/vosk-model-small-tr-0.3', 
-                    'ca':'models/vosk-model-small-ca-0.4', 
-                    'es':'models/vosk-model-small-es-0.3'}
-
-MODEL_URL_DICT = {'en': 'http://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip', 
-                  'ca': 'https://alphacephei.com/vosk/models/vosk-model-small-ca-0.4.zip', 
-                  'tr': 'https://alphacephei.com/vosk/models/vosk-model-small-tr-0.3.zip',
-                  'es': 'https://alphacephei.com/vosk/models/vosk-model-small-es-0.3.zip'}
-
+MODEL_URL_JSON_PATH = 'etc/model_urls.json'
 DEFAULT_ETHERPAD_API_KEY = 'myapikey'
 DEFAULT_ETHERPAD_URL = 'http://localhost:9001'
 ETHERPAD_API_VERSION = '1.2.13'
@@ -88,7 +79,7 @@ parser.add_argument('-x', '--outtxt', type=str, help='text file to store transcr
 parser.add_argument('-m', '--model', type=str, metavar='MODEL_PATH', help='Path to the model')
 parser.add_argument('-d', '--device', type=int_or_str, help='input device (numeric ID or substring)')
 parser.add_argument('-r', '--samplerate', type=int, help='sampling rate')
-parser.add_argument('-l', '--language', type=str, help='language code %s'%list(MODEL_URL_DICT.keys()))
+parser.add_argument('-l', '--language', type=str, help='language code')
 parser.add_argument('-t', '--token', type=str, help='PunkProse token if sending to remote API')
 parser.add_argument('-u', '--url', type=str, help='Etherpad base URL (default: %s)'%DEFAULT_ETHERPAD_URL, default=DEFAULT_ETHERPAD_URL)
 parser.add_argument('-k', '--apikey', type=str, help='Etherpad API key (default: %s)'%DEFAULT_ETHERPAD_API_KEY, default=DEFAULT_ETHERPAD_API_KEY)
@@ -107,12 +98,19 @@ if __name__ == "__main__":
     pad_id = args.padid
     shortcuts_json_path = args.shortcuts
 
+    try:
+        MODEL_URL_DICT = json.load(open(MODEL_URL_JSON_PATH, 'r'))
+    except Exception as e:
+        print(e)
+        print("ERROR: Couldn't read model url json at %s"%MODEL_URL_JSON_PATH)
+        sys.exit()
+
     if not model_path:
         if not lang:
             print("ERROR: Neither model path nor language code given.")
             sys.exit()
-        if lang and lang in MODEL_PATH_DICT:
-            model_path = MODEL_PATH_DICT[lang]
+        if lang and lang in MODEL_URL_DICT:
+            model_path = os.path.join(MODEL_DIR, os.path.splitext(MODEL_URL_DICT[lang].split("/")[-1])[0])
             if not os.path.exists(model_path):
                 print("Model for language %s not found. I will download it."%lang)
                 if not os.path.exists(MODEL_DIR):
@@ -159,6 +157,7 @@ if __name__ == "__main__":
 
 
     try:
+        print("PAD URL:", args.url + "/p/" + pad_id)
         c = EtherpadLiteClient(base_params={'apikey':etherpad_api_key}, api_version=ETHERPAD_API_VERSION, base_url=etherpad_api_url)
         if pad_id in c.listAllPads()['padIDs']:
             print("WARNING: Deleting content of pad with padID %s"%pad_id)
@@ -166,7 +165,6 @@ if __name__ == "__main__":
         else:
             print("Creating Pad with PadID %s"%pad_id)
             c.createPad(padID=pad_id, text='')
-        print("PAD URL:", args.url + "/p/" + pad_id)
     except Exception as e:
         print("Error connecting to Etherpad")
         parser.exit(type(e).__name__ + ': ' + str(e))
