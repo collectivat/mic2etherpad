@@ -18,6 +18,7 @@ DEFAULT_ETHERPAD_URL = 'http://localhost:9001'
 ETHERPAD_API_VERSION = '1.2.13'
 DEFAULT_PAD_ID = 'MIC2ETHER'
 API_PUNKPROSE_URL = "http://api.collectivat.cat/punkProse"
+NEWLINE_AFTER_EACH_RECOGNITION = False
 
 q = queue.Queue()
 
@@ -35,8 +36,8 @@ def callback(indata, frames, time, status):
     q.put(bytes(indata))
 
 def punctuate(text, lang, token):
-    json_data = {'source':text, 
-                 'type':'text',  
+    json_data = {'source':text,
+                 'type':'text',
                  'lang':lang,
                  'recase':True,
                  'token':token}
@@ -67,6 +68,19 @@ def punctuate(text, lang, token):
 
     return result, punctuation_successful
 
+def get_sentence_end_index(mystr, sentence_enders = ['.', '?']):
+    end_indices = []
+    for ender in sentence_enders:
+        try:
+            end_indices.append(mystr.rindex(ender))
+        except:
+            pass
+    if not end_indices:
+        return 0
+    else:
+        return max(end_indices)+1
+
+
 
 parser = argparse.ArgumentParser(description="Dictation with Etherpad", add_help=False)
 parser.add_argument('-a', '--list-audio-devices', action='store_true', help='show list of audio devices and exit')
@@ -86,7 +100,7 @@ parser.add_argument('-k', '--apikey', type=str, help='Etherpad API key (default:
 parser.add_argument('-p', '--padid', type=str, help='Etherpad pad ID to write to (default: %s)'%DEFAULT_PAD_ID, default=DEFAULT_PAD_ID)
 parser.add_argument('-s', '--shortcuts', type=str, help='Path to shortcuts JSON file')
 
-if __name__ == "__main__":    
+if __name__ == "__main__":
     args = parser.parse_args(remaining)
 
     model_path = args.model
@@ -147,7 +161,7 @@ if __name__ == "__main__":
     inverted_shortcuts = {}
     if args.shortcuts:
         try:
-            with open(args.shortcuts, "r") as jsonfile: 
+            with open(args.shortcuts, "r") as jsonfile:
                 shortcuts_data = json.load(jsonfile)
             inverted_shortcuts = {v: k for k, v in shortcuts_data.items()}
             print(inverted_shortcuts)
@@ -186,7 +200,7 @@ if __name__ == "__main__":
 
             rec = vosk.KaldiRecognizer(model, args.samplerate)
 
-            go_to_punctuate = False
+            paragraph_over = False
             end=False
             curr_paragraph = []
             all_paragraphs = []
@@ -203,51 +217,71 @@ if __name__ == "__main__":
                             #Process command
                             if inverted_shortcuts[segment_result['text']] == 'NEWLINE':
                                 c.appendText(padID=pad_id, text="\n")
-                                go_to_punctuate=True
+                                paragraph_over=True
+                                print("paragraph_over for NEWLINE")
                             elif inverted_shortcuts[segment_result['text']] == 'END':
-                                go_to_punctuate=True
+                                paragraph_over=True
                                 end=True
                         else:
                             print(segment_result['text'])
-                            c.appendText(padID=pad_id, text=segment_result['text'] + "\n")
+                            c.appendText(padID=pad_id, text=segment_result['text'])
+                            if NEWLINE_AFTER_EACH_RECOGNITION:
+                                c.appendText(padID=pad_id, text="\n")
+                            else:
+                                c.appendText(padID=pad_id, text=" ")
                             curr_paragraph.append(segment_result['text'])
-                    elif curr_paragraph:
-                        print("")
-                        if curr_paragraph:
-                            c.appendText(padID=pad_id, text="\n")
-                        go_to_punctuate=True
+                    elif curr_paragraph and not paragraph_over:
+                        paragraph_over=True
+                        print("paragraph_over cuz text empty")
+                        print(curr_paragraph)
 
-                    if token and go_to_punctuate and curr_paragraph:
+                    if token and paragraph_over and curr_paragraph:
+                        print("to punctuate")
+                        print()
+                        # #punctuate current paragraph
+                        # to_punc = ' '.join(curr_paragraph)
+                        # punctuated_paragraph_plain, status = punctuate(to_punc, lang, token)
+                        # punctuated_paragraph_plain_tokens = punctuated_paragraph_plain.split()
+                        # punctuated_segmented_paragraph = ""
+                        # plain_token_index = 0
+                        #
+                        # #transfer new lines to punctutated paragraph
+                        # line_token_counts = [len(l.split()) for l in curr_paragraph]
+                        # newline_indices = [sum(line_token_counts[0:i])+c-1 for i,c in enumerate(line_token_counts)]
+                        #
+                        # for i, t in enumerate(punctuated_paragraph_plain_tokens):
+                        #     punctuated_segmented_paragraph += t
+                        #     if i in newline_indices and NEWLINE_AFTER_EACH_RECOGNITION:
+                        #         punctuated_segmented_paragraph += '\n'
+                        #     else:
+                        #         punctuated_segmented_paragraph += ' '
+                        #
+                        # #clean current paragraph
+                        # curr_paragraph = []
+
+                        #get the text as it is from the pad
+                        all_text = c.getText(padID=pad_id)['text']
+                        sentence_ends_at = get_sentence_end_index(all_text)
+                        already_punctuated = all_text[0:sentence_ends_at]
+                        yet_to_punctuate = all_text[sentence_ends_at:]
+
                         #punctuate current paragraph
-                        to_punc = ' '.join(curr_paragraph)
+                        to_punc = ' '.join(yet_to_punctuate.split('\n'))
+                        print("Sending to punc:", to_punc)
                         punctuated_paragraph_plain, status = punctuate(to_punc, lang, token)
-                        punctuated_paragraph_plain_tokens = punctuated_paragraph_plain.split()
-                        punctuated_segmented_paragraph = ""
                         plain_token_index = 0
 
-                        #transfer new lines to punctutated paragraph
-                        line_token_counts = [len(l.split()) for l in curr_paragraph]
-                        newline_indices = [sum(line_token_counts[0:i])+c-1 for i,c in enumerate(line_token_counts)]
-
-                        for i, t in enumerate(punctuated_paragraph_plain_tokens):
-                            punctuated_segmented_paragraph += t 
-                            if i in newline_indices:
-                                punctuated_segmented_paragraph += '\n'
-                            else:
-                                punctuated_segmented_paragraph += ' '
-
-                        #clean current paragraph
-                        curr_paragraph = []
-
-                        #add it to all paragraphs
-                        all_paragraphs.append(punctuated_segmented_paragraph)
-
                         #set the whole pad to all_paragraphs
-                        c.setText(padID=pad_id, text='\n'.join(all_paragraphs)+'\n\n')
+                        text_to_set = ''
+                        if already_punctuated:
+                            text_to_set += already_punctuated + '\n'
+                        text_to_set += punctuated_paragraph_plain + '\n\n'
+                        c.setText(padID=pad_id, text=text_to_set)
 
-                        go_to_punctuate = False
+                        paragraph_over = False
+                        curr_paragraph = []
                     if end:
-                        break                        
+                        break
 
             if dump_fn is not None:
                 dump_fn.write('\n'.join(all_paragraphs))
