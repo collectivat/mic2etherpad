@@ -11,6 +11,7 @@ import requests
 import json
 from etherpad_lite import EtherpadLiteClient
 
+
 MODEL_DIR = 'models'
 MODEL_URL_JSON_PATH = 'etc/model_urls.json'
 DEFAULT_ETHERPAD_API_KEY = 'myapikey'
@@ -68,6 +69,9 @@ def punctuate(text, lang, token):
 
     return result, punctuation_successful
 
+def translate(text, mt_translator, source_lang, target_lang):
+    return mt_translator.translate(text,src=source_lang,dest=target_lang).text
+
 def get_sentence_end_index(mystr, sentence_enders = ['.', '?']):
     end_indices = []
     for ender in sentence_enders:
@@ -93,7 +97,8 @@ parser.add_argument('-x', '--outtxt', type=str, help='text file to store transcr
 parser.add_argument('-m', '--model', type=str, metavar='MODEL_PATH', help='Path to the model')
 parser.add_argument('-d', '--device', type=int_or_str, help='input device (numeric ID or substring)')
 parser.add_argument('-r', '--samplerate', type=int, help='sampling rate')
-parser.add_argument('-l', '--language', type=str, help='language code')
+parser.add_argument('-l', '--language', type=str, help='source language code')
+parser.add_argument('-f', '--translatelang', type=str, help='translation language code')
 parser.add_argument('-t', '--token', type=str, help='PunkProse token if sending to remote API')
 parser.add_argument('-u', '--url', type=str, help='Etherpad base URL (default: %s)'%DEFAULT_ETHERPAD_URL, default=DEFAULT_ETHERPAD_URL)
 parser.add_argument('-k', '--apikey', type=str, help='Etherpad API key (default: %s)'%DEFAULT_ETHERPAD_API_KEY, default=DEFAULT_ETHERPAD_API_KEY)
@@ -106,6 +111,7 @@ if __name__ == "__main__":
     model_path = args.model
     token = args.token
     lang = args.language
+    translate_lang = args.translatelang
     out_txt = args.outtxt
     etherpad_api_key = args.apikey
     etherpad_api_url = args.url + '/api'
@@ -169,6 +175,11 @@ if __name__ == "__main__":
             print("ERROR: Couldn't read shortcuts file", args.shortcuts)
             print(e)
 
+    if translate_lang:
+        from googletrans import Translator
+        mt_translator = Translator()
+
+        translate_pad_id = pad_id + "_" + translate_lang
 
     try:
         print("PAD URL:", args.url + "/p/" + pad_id)
@@ -179,6 +190,14 @@ if __name__ == "__main__":
         else:
             print("Creating Pad with PadID %s"%pad_id)
             c.createPad(padID=pad_id, text='')
+
+        if translate_lang:
+            if translate_pad_id in c.listAllPads()['padIDs']:
+                print("WARNING: Deleting content of pad with padID %s"%translate_pad_id)
+                c.setText(padID=translate_pad_id, text='')
+            else:
+                print("Creating Pad for translation with PadID %s"%translate_pad_id)
+                c.createPad(padID=translate_pad_id, text='')
     except Exception as e:
         print("Error connecting to Etherpad")
         parser.exit(type(e).__name__ + ': ' + str(e))
@@ -236,29 +255,6 @@ if __name__ == "__main__":
                         print(curr_paragraph)
 
                     if token and paragraph_over and curr_paragraph:
-                        print("to punctuate")
-                        print()
-                        # #punctuate current paragraph
-                        # to_punc = ' '.join(curr_paragraph)
-                        # punctuated_paragraph_plain, status = punctuate(to_punc, lang, token)
-                        # punctuated_paragraph_plain_tokens = punctuated_paragraph_plain.split()
-                        # punctuated_segmented_paragraph = ""
-                        # plain_token_index = 0
-                        #
-                        # #transfer new lines to punctutated paragraph
-                        # line_token_counts = [len(l.split()) for l in curr_paragraph]
-                        # newline_indices = [sum(line_token_counts[0:i])+c-1 for i,c in enumerate(line_token_counts)]
-                        #
-                        # for i, t in enumerate(punctuated_paragraph_plain_tokens):
-                        #     punctuated_segmented_paragraph += t
-                        #     if i in newline_indices and NEWLINE_AFTER_EACH_RECOGNITION:
-                        #         punctuated_segmented_paragraph += '\n'
-                        #     else:
-                        #         punctuated_segmented_paragraph += ' '
-                        #
-                        # #clean current paragraph
-                        # curr_paragraph = []
-
                         #get the text as it is from the pad
                         all_text = c.getText(padID=pad_id)['text']
                         sentence_ends_at = get_sentence_end_index(all_text)
@@ -277,6 +273,17 @@ if __name__ == "__main__":
                             text_to_set += already_punctuated + '\n'
                         text_to_set += punctuated_paragraph_plain + '\n\n'
                         c.setText(padID=pad_id, text=text_to_set)
+
+                        #translate current paragraph
+                        if translate_lang:
+                            all_translated_text = c.getText(padID=translate_pad_id)['text'].strip()
+
+                            translated_paragraph_plain = translate(punctuated_paragraph_plain, mt_translator, lang, translate_lang)
+                            text_to_set = ''
+                            if all_translated_text:
+                                text_to_set += all_translated_text + '\n'
+                            text_to_set += translated_paragraph_plain + '\n\n'
+                            c.setText(padID=translate_pad_id, text=text_to_set)
 
                         paragraph_over = False
                         curr_paragraph = []
